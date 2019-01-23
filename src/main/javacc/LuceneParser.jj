@@ -1,0 +1,120 @@
+options {
+    STATIC = false;
+    UNICODE_INPUT = true;
+    IGNORE_CASE = true;
+    USER_CHAR_STREAM = false;
+    ERROR_REPORTING = true;
+    SANITY_CHECK = true;
+}
+
+PARSER_BEGIN(LuceneParser)
+    package org.rodens.lucene.parser;
+
+    import org.rodens.lucene.nodes.*;
+
+    public class LuceneParser {
+        private final LuceneParserHelper helper = new LuceneParserHelper();
+    }
+PARSER_END(LuceneParser)
+
+TOKEN_MGR_DECLS :
+{
+    private java.util.Stack<Integer> stateStack = new java.util.Stack();
+}
+
+SKIP :
+{
+    " "
+  | "\t"
+  | "\r"
+  | "\n"
+
+}
+
+TOKEN :
+{
+    <#ESC : "\\" ["{","}","[","]","(",")",":"," ","\"","\\","/"] >
+    | <AND : "AND">
+   | <OR: "OR">
+   | <NOT: "NOT">
+   | <LPARENS : "(">
+   | <RPARENS : ")">
+   | <COLON : ":" > : EXP
+   | <FIELD : "_ANYFIELD_" | (["A"-"Z", "a"-"z"](["A"-"Z","a"-"z","0"-"9"])*) >
+ }
+
+<EXP>  TOKEN :
+ {
+
+    <REGEX: "/" (<ESC> | ~["/"])* "/">  {matchedToken.image = matchedToken.image.substring(1,matchedToken.image.length()-1);} : DEFAULT
+   | <QUOTED_VALUE : "\"" (~["\""] | "\\\"")* "\""> {matchedToken.image = matchedToken.image.substring(1,matchedToken.image.length()-1);}: DEFAULT
+   | <VALUE : ("\\*" | "\\?" | ~[" ", "\"", ",", "\t","\r","\n",":","/","*","?","(",")"] | <ESC> )+> {matchedToken.image = LuceneParserHelper.removeLuceneEscapes(matchedToken.image);} : DEFAULT
+   | <WILDCARD : (~["\"", " ","\t","\r","\n",":","/","*","?"])* ("*"|"?") (~[" ","\t","\r","\n",":","/"])*> : DEFAULT
+   | <LBRACKET : "[">
+   | <LPARENSE : "(">
+   | <RPARENSE : ")"> : DEFAULT
+   | <RBRACKET: "]"> : DEFAULT
+   | <TO: "TO">
+
+}
+
+
+QueryNode parse() :
+{
+}
+{
+    {helper.initTree();} expression()  <EOF> {return helper.getCompletedTree();}
+}
+
+void terminal() :
+{
+    Token field;
+    TerminalNode node;
+}
+{
+    field = <FIELD> <COLON> (
+            <VALUE> {node = new EqualsNode(field.image, LuceneParserHelper.removeWildcardEscapes(token.image));}
+           | <QUOTED_VALUE> { node = new EqualsNode(field.image, token.image);}
+           | <REGEX> {node = new RegexNode(field.image, token.image);}
+           | <WILDCARD> {node = new WildcardNode(field.image, token.image);}
+           | node = range(field.image))
+
+           {helper.pushOperand(node);}
+}
+
+void expression() :
+{
+
+}
+{
+    phrase() ( binaryOperation() phrase() )*
+}
+
+void phrase() :
+{
+}
+{
+    terminal()
+    | <LPARENS> {helper.pushOperator(token);} expression()  <RPARENS> {helper.pushOperator(token);}
+}
+
+void binaryOperation() :
+{
+}
+{
+    (<AND> | <OR>)    {helper.pushOperator(token);}
+}
+
+RangeNode range(String field) :
+{
+    RangeNode range;
+    boolean lowerInclusive;
+    boolean upperInclusive;
+    String upperValue;
+    String lowerValue;
+}
+{
+    (<LPARENSE> | <LBRACKET>) {lowerInclusive = (token.kind == LBRACKET);} <VALUE> {lowerValue = token.image;} <TO> <VALUE> {upperValue = token.image;} (<RPARENSE> | <RBRACKET>) {upperInclusive = token.kind == RBRACKET;}
+
+    {return new RangeNode(field, lowerValue, lowerInclusive, upperValue, upperInclusive);}
+}
